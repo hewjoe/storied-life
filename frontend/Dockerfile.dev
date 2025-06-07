@@ -1,0 +1,44 @@
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Install curl for healthcheck
+RUN apk add --no-cache curl
+
+# Copy package files first for better layer caching
+COPY package.json package-lock.json ./
+
+# Install dependencies including dev dependencies
+RUN npm install
+
+# Copy configuration files
+COPY vite.config.ts tsconfig.json tsconfig.node.json ./
+COPY tailwind.config.js postcss.config.js ./
+
+# Copy source code and public directory
+# Note: These will be overridden by volume mounts in development
+COPY src ./src
+COPY public ./public
+
+# Create a non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nextjs -u 1001
+
+# Change ownership of the app directory
+RUN chown -R nextjs:nodejs /app
+USER nextjs
+
+# Expose port
+EXPOSE 3001
+
+# Set environment variables
+ENV NODE_ENV=development
+ENV VITE_API_URL=http://localhost:3001
+
+# Health check
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+#    CMD curl -f http://localhost:3000 || exit 1
+
+# Start development server with hot reloading
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3001"] 

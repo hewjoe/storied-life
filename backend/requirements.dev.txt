@@ -1,0 +1,26 @@
+# Include base requirements
+-r requirements.txt
+
+# Development tools
+pre-commit==3.6.0
+jupyter==1.0.0
+ipython==8.17.2
+
+# Enhanced testing
+pytest-xdist==3.5.0
+pytest-sugar==0.9.7
+pytest-html==4.1.1
+coverage==7.3.2
+
+# Code analysis
+bandit==1.7.5
+safety
+isort==5.12.0
+
+# Documentation
+mkdocs==1.5.3
+mkdocs-material==9.4.14
+mkdocs-swagger-ui-tag==0.6.8
+
+# Database tools
+pgcli==4.0.1 

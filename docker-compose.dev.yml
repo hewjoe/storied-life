@@ -1,0 +1,170 @@
+version: '3.8'
+
+services:
+  # Frontend Application (Development)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      args:
+        - VITE_API_URL=http://vision.projecthewitt.info:3001
+    container_name: storied-life-dev-frontend
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/package-lock.json:/app/package-lock.json
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tailwind.config.js:/app/tailwind.config.js
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - frontend-node-modules:/app/node_modules
+    environment:
+      - VITE_API_URL=http://vision.projecthewitt.info:3001
+      - NODE_ENV=development
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # Backend API (Development)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    container_name: storied-life-dev-backend
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/main.py:/app/main.py
+      - ./backend/requirements.txt:/app/requirements.txt
+      - ./data/uploads:/app/uploads
+    environment:
+      - DATABASE_URL=postgresql://storied_dev:dev_password_123@postgres:5432/storied_life_dev
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=dev_password_123
+      - REDIS_URL=redis://redis:6379
+      - LITELLM_URL=http://litellm:4001
+      - SECRET_KEY=dev_secret_key_change_in_production
+      - STORAGE_TYPE=local
+      - ENVIRONMENT=development
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - SMTP_USERNAME=
+      - SMTP_PASSWORD=
+      - SMTP_USE_TLS=false
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - neo4j
+      - redis
+      - litellm
+
+  # AI Proxy Service (Development)
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: storied-life-dev-litellm
+    environment:
+      - LITELLM_MASTER_KEY=dev_master_key_123
+      - DATABASE_URL=postgresql://storied_dev:dev_password_123@postgres:5432/storied_life_dev
+    volumes:
+      - ./litellm/config.dev.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4001", "--num_workers", "1"]
+    ports:
+      - "4001:4001"
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+    depends_on:
+      - postgres
+
+  # PostgreSQL Database for Development
+  postgres:
+    image: postgres:15
+    container_name: storied-life-dev-postgres
+    environment:
+      - POSTGRES_DB=storied_life_dev
+      - POSTGRES_USER=storied_dev
+      - POSTGRES_PASSWORD=dev_password_123
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U storied_dev -d storied_life_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Neo4J Graph Database for Development
+  neo4j:
+    image: neo4j:5.15
+    container_name: storied-life-dev-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/dev_password_123
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_apoc_import_file_use__neo4j__config=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j-dev-data:/data
+      - neo4j-dev-logs:/logs
+      - neo4j-dev-import:/var/lib/neo4j/import
+      - neo4j-dev-plugins:/plugins
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+
+  # Redis Cache for Development
+  redis:
+    image: redis:7-alpine
+    container_name: storied-life-dev-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-dev-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+
+  # MailHog for Email Testing
+  mailhog:
+    image: mailhog/mailhog
+    container_name: storied-life-dev-mailhog
+    ports:
+      - "1025:1025"  # SMTP server
+      - "8025:8025"  # Web UI
+    networks:
+      - storied-life-dev
+    restart: unless-stopped
+
+volumes:
+  postgres-dev-data:
+  neo4j-dev-data:
+  neo4j-dev-logs:
+  neo4j-dev-import:
+  neo4j-dev-plugins:
+  redis-dev-data:
+  frontend-node-modules:
+
+networks:
+  storied-life-dev:
+    driver: bridge 
