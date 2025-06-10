@@ -1,0 +1,909 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudFormation template for deploying the Storied Life application on AWS
+  using an Auto Scaling Group with Spot Instances, a new VPC, and IAM roles.
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Description: The name of the application.
+    Default: storied-life
+  InstanceType:
+    Type: String
+    Description: EC2 instance type for the application.
+    Default: t3.medium
+  NumInstances:
+    Type: Number
+    Description: The number of instances to run in the Auto Scaling Group.
+    Default: 1
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Description: The latest AMI ID for Ubuntu 24.04 LTS.
+    Default: '/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id'
+  SshKeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances.
+  MySshCidrIp:
+    Type: String
+    Description: The CIDR IP range for SSH access.
+    Default: 24.218.238.112/32
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: Must be a valid IP CIDR range.
+  BastionInstanceType:
+    Type: String
+    Description: EC2 instance type for the bastion host.
+    Default: t3.nano
+  BastionDesiredCapacity:
+    Type: Number
+    Description: The desired number of bastion instances. Set to 0 to keep it off by default.
+    Default: 0
+    MinValue: 0
+    MaxValue: 1
+  HostedZoneId:
+    Type: String
+    Description: 'Route 53 Hosted Zone ID for creating DNS records (e.g., Z2FDTNDATAQYW2). If you leave this blank, DNS record creation will be skipped.'
+    Default: ''
+  BastionDnsName:
+    Type: String
+    Description: 'The DNS A record for the bastion host.'
+    Default: 'bastion.storied-life.me'
+  DomainName:
+    Type: String
+    Description: 'The domain name for the application (e.g., storied-life.me).'
+    Default: 'storied-life.me'
+  Subdomains:
+    Type: CommaDelimitedList
+    Description: 'Comma-separated list of subdomains for the application.'
+    Default: 'frontend,backend,litellm,traefik,authelia,dex'
+  DBInstanceClass:
+    Type: String
+    Description: The instance class for the RDS database.
+    Default: db.t3.micro
+  DBAllocatedStorage:
+    Type: Number
+    Description: The size of the database (in GB).
+    Default: 20
+  DBName:
+    Type: String
+    Description: The name of the database to create. This is ignored if restoring from a snapshot.
+    Default: 'storiedlife'
+  DBSnapshotIdentifier:
+    Type: String
+    Description: 'Optional. The identifier for the DB snapshot to restore from. If you specify this, DBName is ignored.'
+    Default: ''
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Application Configuration'
+        Parameters:
+          - ApplicationName
+          - InstanceType
+          - NumInstances
+      - Label:
+          default: 'EC2 Configuration'
+        Parameters:
+          - LatestAmiId
+          - SshKeyName
+          - MySshCidrIp
+      - Label:
+          default: 'Bastion Host Configuration'
+        Parameters:
+          - BastionInstanceType
+          - BastionDesiredCapacity
+          - HostedZoneId
+          - BastionDnsName
+          - DomainName
+          - Subdomains
+      - Label:
+          default: 'Database Configuration'
+        Parameters:
+          - DBInstanceClass
+          - DBAllocatedStorage
+          - DBName
+          - DBSnapshotIdentifier
+    ParameterLabels:
+      ApplicationName:
+        default: 'Application Name'
+      InstanceType:
+        default: 'Instance Type'
+      NumInstances:
+        default: 'Number of Instances'
+      LatestAmiId:
+        default: 'AMI ID'
+      SshKeyName:
+        default: 'SSH Key Pair Name'
+      MySshCidrIp:
+        default: 'Your SSH IP Address'
+      BastionInstanceType:
+        default: 'Bastion Instance Type'
+      BastionDesiredCapacity:
+        default: 'Bastion Desired Instances'
+      HostedZoneId:
+        default: 'Route 53 Hosted Zone ID'
+      BastionDnsName:
+        default: 'Bastion DNS Name'
+      DomainName:
+        default: 'Domain Name'
+      Subdomains:
+        default: 'Application Subdomains'
+      DBInstanceClass:
+        default: 'Database Instance Class'
+      DBAllocatedStorage:
+        default: 'Database Storage (GB)'
+      DBName:
+        default: 'Database Name'
+      DBSnapshotIdentifier:
+        default: 'Database Snapshot ID'
+
+Conditions:
+  CreateBastion: !Not [!Equals [!Ref BastionDesiredCapacity, 0]]
+  RestoreFromDBSnapshot: !Not [!Equals [!Ref DBSnapshotIdentifier, '']]
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
+
+Resources:
+  # -- Networking Resources --
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.90.48.0/22
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref ApplicationName
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.90.48.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Public Subnet A'
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.90.49.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Public Subnet B'
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.90.50.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Private Subnet A'
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.90.51.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Private Subnet B'
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref ApplicationName
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Public Routes'
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  SubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref SubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} NAT Gateway'
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName} Private Routes'
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTable
+
+  # -- Security Groups --
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: 'Allow SSH from specified IP and all HTTP/HTTPS traffic'
+      SecurityGroupIngress:
+        - IpProtocol: tcp # Allow SSH from Bastion
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref BastionSecurityGroup
+        - IpProtocol: tcp # Allow HTTPS from ALB
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-instance-sg'
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: 'Allow SSH and VPN access to the bastion host'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MySshCidrIp
+        - IpProtocol: udp # OpenVPN
+          FromPort: 1194
+          ToPort: 1194
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp # WireGuard
+          FromPort: 51820
+          ToPort: 51820
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-sg'
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: 'Allow database connections from the application'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db-sg'
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: 'Allow web traffic on port 443'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-alb-sg'
+
+  # -- KMS Key for Encryption --
+  KmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for encrypting EBS volumes
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Id: key-default-1
+        Statement:
+          - Sid: 'Enable IAM User Permissions'
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+  KmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ApplicationName}-key'
+      TargetKeyId: !Ref KmsKey
+
+  # -- S3 Bucket for Application Data --
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ApplicationName}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Ref ApplicationName
+
+  # -- IAM Role and Instance Profile --
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: !Sub '${ApplicationName}-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                Resource: !Sub 'arn:aws:s3:::${S3Bucket}/*'
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: !Ref DBSecret
+              # Required for cfn-init
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:DescribeStackResource'
+                  - 'cloudformation:SignalResource'
+                Resource: !Ref 'AWS::StackId'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore' # For SSM Agent
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-instance-role'
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref EC2InstanceRole
+
+  BastionInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: !Sub '${ApplicationName}-bastion-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:DescribeStackResource'
+                  - 'cloudformation:SignalResource'
+                Resource: !Ref 'AWS::StackId'
+              - Effect: Allow
+                Action:
+                  - 'route53:ChangeResourceRecordSets'
+                Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-role'
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref BastionInstanceRole
+
+  # -- EC2 Launch Template and Auto Scaling Group --
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${ApplicationName}-launch-template'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref SshKeyName
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              Encrypted: true
+              KmsKeyId: !GetAtt KmsKey.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: false
+            Groups:
+              - !Ref InstanceSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
+        UserData: !Base64
+          'Fn::Sub': |
+            #!/bin/bash -xe
+            # Install necessary packages
+            apt-get update -y
+            apt-get install -y python3-pip unzip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+            # Start cfn-init
+            /usr/local/bin/cfn-init -v \
+              --stack ${AWS::StackName} \
+              --resource LaunchTemplate \
+              --configsets a_full_install \
+              --region ${AWS::Region}
+
+            # Signal completion
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          a_full_install:
+            - "install_docker"
+            - "install_app"
+
+        install_docker:
+          commands:
+            01_install_docker:
+              command: |
+                apt-get update -y
+                apt-get install -y docker.io
+                systemctl start docker
+                systemctl enable docker
+            02_install_docker_compose:
+              command: |
+                curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                chmod +x /usr/local/bin/docker-compose
+            03_add_user_to_docker_group:
+              command: usermod -aG docker ubuntu
+
+        install_app:
+          commands:
+            01_create_app_dir:
+              command: mkdir -p /opt/app && chown ubuntu:ubuntu /opt/app
+              test: '[ ! -d /opt/app ]'
+            02_get_db_secret:
+              command: !Sub |
+                aws secretsmanager get-secret-value --secret-id ${DBSecret} --region ${AWS::Region} --query SecretString --output text > /opt/app/.env.db
+            03_set_env_ownership:
+              command: chown ubuntu:ubuntu /opt/app/.env.db
+            04_install_basic_setup:
+              command: |
+                echo "Application setup complete. Docker-compose configuration should be deployed separately."
+                echo "Database credentials stored in /opt/app/.env.db"
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: 1
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      DesiredCapacity: !Ref NumInstances
+      MinSize: !Ref NumInstances
+      MaxSize: !Ref NumInstances
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-instance'
+          PropagateAtLaunch: true
+
+  BastionLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${ApplicationName}-bastion-launch-template'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref BastionInstanceType
+        KeyName: !Ref SshKeyName
+        IamInstanceProfile:
+          Arn: !GetAtt BastionInstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+              Encrypted: true
+              KmsKeyId: !GetAtt KmsKey.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref BastionSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        UserData: !Base64
+          'Fn::Sub': |
+            #!/bin/bash -xe
+            # Install necessary packages
+            apt-get update -y
+            apt-get install -y python3-pip unzip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+            # Start cfn-init
+            /usr/local/bin/cfn-init -v \
+              --stack ${AWS::StackName} \
+              --resource BastionLaunchTemplate \
+              --configsets setup \
+              --region ${AWS::Region}
+
+            # Signal completion
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionAutoScalingGroup --region ${AWS::Region}
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "install_awscli"
+            - "update_dns_record"
+        install_awscli:
+          commands:
+            01_install_tools:
+              command: |
+                apt-get update -y
+                apt-get install -y postgresql-client
+                curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                unzip awscliv2.zip
+                ./aws/install
+              cwd: /tmp
+        update_dns_record:
+          commands:
+            01_update_route53:
+              command: !Sub |
+                #!/bin/bash
+                TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+                PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+                if [ -z "$PUBLIC_IP" ]; then
+                  echo "Failed to get public IP from instance metadata"
+                  exit 1
+                fi
+
+                CHANGE_BATCH_JSON=$(cat <<EOF
+                {
+                  "Comment": "UPSERT bastion host A record for stack ${AWS::StackName}",
+                  "Changes": [
+                    {
+                      "Action": "UPSERT",
+                      "ResourceRecordSet": {
+                        "Name": "${BastionDnsName}",
+                        "Type": "A",
+                        "TTL": 300,
+                        "ResourceRecords": [
+                          { "Value": "$PUBLIC_IP" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                EOF
+                )
+
+                aws route53 change-resource-record-sets --hosted-zone-id "${HostedZoneId}" --change-batch "$CHANGE_BATCH_JSON"
+          test: !If [CreateBastion, !If [HasHostedZone, "true", "false"], "false"]
+
+  BastionAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+        Count: !If [CreateBastion, 1, 0]
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BastionLaunchTemplate
+        Version: !GetAtt BastionLaunchTemplate.LatestVersionNumber
+      DesiredCapacity: !Ref BastionDesiredCapacity
+      MinSize: '0'
+      MaxSize: '1'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-instance'
+          PropagateAtLaunch: true
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: 'Subnet group for the RDS instance'
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db-subnet-group'
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      Engine: postgres
+      EngineVersion: '16.9'
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBName: !If [RestoreFromDBSnapshot, !Ref 'AWS::NoValue', !Ref DBName]
+      MasterUsername: !Join ['', [ '{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', [ '{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:password}}' ]]
+      DBSnapshotIdentifier: !If [RestoreFromDBSnapshot, !Ref DBSnapshotIdentifier, !Ref 'AWS::NoValue']
+      StorageEncrypted: true
+      KmsKeyId: !Ref KmsKey
+      DeletionProtection: false
+      BackupRetentionPeriod: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db'
+
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ApplicationName}/db-credentials'
+      Description: 'Database credentials for the application'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "postgres"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub www.${DomainName}
+        - !Sub frontend.${DomainName}
+        - !Sub backend.${DomainName}
+        - !Sub litellm.${DomainName}
+        - !Sub traefik.${DomainName}
+        - !Sub authelia.${DomainName}
+        - !Sub dex.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-certificate'
+
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${ApplicationName}-alb'
+      Scheme: internet-facing
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-alb'
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${ApplicationName}-tg'
+      VpcId: !Ref VPC
+      Protocol: HTTPS
+      Port: 443
+      HealthCheckProtocol: HTTPS
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200,301,302'
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-tg'
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  DNSRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Ref DomainName
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'www.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'frontend.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'backend.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'litellm.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'traefik.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'authelia.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub 'dex.${DomainName}'
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+
+Outputs:
+  VPCId:
+    Description: The ID of the VPC
+    Value: !Ref VPC
+  PublicSubnetA:
+    Description: The ID of Public Subnet A
+    Value: !Ref SubnetA
+  PublicSubnetB:
+    Description: The ID of Public Subnet B
+    Value: !Ref SubnetB
+  PrivateSubnetA:
+    Description: The ID of Private Subnet A
+    Value: !Ref PrivateSubnetA
+  PrivateSubnetB:
+    Description: The ID of Private Subnet B
+    Value: !Ref PrivateSubnetB
+  S3BucketName:
+    Description: The name of the S3 bucket for application data
+    Value: !Ref S3Bucket
+  InstanceRoleArn:
+    Description: The ARN of the IAM Role for EC2 instances
+    Value: !GetAtt EC2InstanceRole.Arn
+  KmsKeyArn:
+    Description: The ARN of the KMS key for volume encryption
+    Value: !GetAtt KmsKey.Arn
+  BastionAutoScalingGroupName:
+    Description: The name of the Bastion Auto Scaling Group
+    Value: !Ref BastionAutoScalingGroup
+  ALBDnsName:
+    Description: The DNS name of the Application Load Balancer
+    Value: !GetAtt AppLoadBalancer.DNSName
+  DatabaseEndpointAddress:
+    Description: 'The connection endpoint for the database'
+    Value: !GetAtt DBInstance.Endpoint.Address
+  DatabaseEndpointPort:
+    Description: 'The connection port for the database'
+    Value: !GetAtt DBInstance.Endpoint.Port
+  DatabaseSecretArn:
+    Description: 'The ARN of the secret containing database credentials'
+    Value: !Ref DBSecret 

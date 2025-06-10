@@ -1,0 +1,496 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: |
+  Application stack for the Storied Life application including EC2 instances, load balancer, SSL certificate, and DNS records.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Application Configuration
+        Parameters:
+          - ApplicationName
+          - InstanceType
+          - NumInstances
+      - Label:
+          default: EC2 Configuration
+        Parameters:
+          - LatestAmiId
+      - Label:
+          default: DNS Configuration
+        Parameters:
+          - HostedZoneId
+          - DomainName
+          - Subdomains
+    ParameterLabels:
+      ApplicationName:
+        default: Application Name
+      InstanceType:
+        default: Instance Type
+      NumInstances:
+        default: Number of Instances
+      LatestAmiId:
+        default: AMI ID
+      HostedZoneId:
+        default: Route 53 Hosted Zone ID
+      DomainName:
+        default: Domain Name
+      Subdomains:
+        default: Application Subdomains
+
+Parameters:
+  ApplicationName:
+    Description: The name of the application.
+    Type: String
+    Default: storied-life
+
+  InstanceType:
+    Description: EC2 instance type for the application.
+    Type: String
+    Default: t3.medium
+
+  NumInstances:
+    Description: The number of instances to run in the Auto Scaling Group.
+    Type: Number
+    Default: 1
+
+  LatestAmiId:
+    Description: The latest AMI ID for Ubuntu 24.04 LTS.
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+  HostedZoneId:
+    Description: Route 53 Hosted Zone ID for creating DNS records (e.g., Z2FDTNDATAQYW2).
+    Type: String
+
+  DomainName:
+    Description: The domain name for the application (e.g., storied-life.me).
+    Type: String
+    Default: storied-life.me
+
+  Subdomains:
+    Description: Comma-separated list of subdomains for the application.
+    Type: CommaDelimitedList
+    Default: frontend,backend,litellm,traefik,authelia,dex
+
+Resources:
+
+  # -- EC2 Key Pair --
+  ApplicationKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub ${ApplicationName}-app-keypair
+      KeyType: rsa
+      KeyFormat: pem
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-app-keypair
+
+  # -- Security Groups --
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !ImportValue
+        Fn::Sub: ${ApplicationName}-VPC-ID
+      GroupDescription: Allow web traffic on port 443
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-alb-sg
+
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !ImportValue
+        Fn::Sub: ${ApplicationName}-VPC-ID
+      GroupDescription: Security group for application instances
+      SecurityGroupIngress:
+        - IpProtocol: tcp # Allow HTTPS from ALB
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-instance-sg
+
+  # Add SSH access rule from bastion (if bastion stack exists)
+  InstanceSSHIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref InstanceSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !ImportValue
+        Fn::Sub: ${ApplicationName}-BastionSecurityGroup-ID
+
+  # Add rule to RDS security group to allow access from instances  
+  RDSIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !ImportValue
+        Fn::Sub: ${ApplicationName}-RDSSecurityGroup-ID
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref InstanceSecurityGroup
+
+  # -- IAM Role and Instance Profile --
+  EC2InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: !Sub ${ApplicationName}-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub
+                    - arn:aws:s3:::${BucketName}/*
+                    - BucketName: !ImportValue
+                        Fn::Sub: ${ApplicationName}-S3Bucket-Name
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !ImportValue
+                  Fn::Sub: ${ApplicationName}-Database-Secret-ARN
+
+              # Required for cfn-init
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:SignalResource
+                Resource: !Ref AWS::StackId
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore # For SSM Agent
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-instance-role
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref EC2InstanceRole
+
+  # -- Launch Template and Auto Scaling Group --
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          a_full_install:
+            - safe_install
+        safe_install:
+          commands:
+            01_say_hello:
+              command: echo "Hello, world!"
+        install_docker:
+          commands:
+            01_install_docker:
+              command: |
+                apt-get update -y
+                apt-get install -y docker.io
+                systemctl start docker
+                systemctl enable docker
+            02_install_docker_compose:
+              command: |
+                curl -L "https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                chmod +x /usr/local/bin/docker-compose
+            03_add_user_to_docker_group:
+              command: usermod -aG docker ubuntu
+        install_app:
+          commands:
+            01_create_app_dir:
+              command: mkdir -p /opt/app && chown ubuntu:ubuntu /opt/app
+              test: '[ ! -d /opt/app ]'
+            02_get_db_secret:
+              command: !Sub
+                - |
+                  aws secretsmanager get-secret-value --secret-id ${DatabaseSecretArn} --region ${AWS::Region} --query SecretString --output text > /opt/app/.env.db
+                - DatabaseSecretArn: !ImportValue
+                    Fn::Sub: ${ApplicationName}-Database-Secret-ARN
+            03_set_env_ownership:
+              command: chown ubuntu:ubuntu /opt/app/.env.db
+            04_install_basic_setup:
+              command: |
+                echo "Application setup complete. Docker-compose configuration should be deployed separately."
+                echo "Database credentials stored in /opt/app/.env.db"
+    Properties:
+      LaunchTemplateName: !Sub ${ApplicationName}-launch-template
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref ApplicationKeyPair
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 30
+              VolumeType: gp3
+              Encrypted: true
+              KmsKeyId: !ImportValue
+                Fn::Sub: ${ApplicationName}-KmsKey-ARN
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: false
+            Groups:
+              - !Ref InstanceSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
+        UserData: !Base64
+          Fn::Sub: |
+            #!/bin/bash -xe
+            # Redirect all output to log file
+            exec > /var/log/user-data.log 2>&1
+            
+            echo "Starting user-data script execution at $(date)"
+            
+            # Install necessary packages
+            apt-get update -y
+            apt-get install -y python3-pip unzip python3-venv
+            
+            # Install CloudFormation helper scripts (override externally-managed-environment for system tools)
+            pip3 install --break-system-packages https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+            # Start cfn-init
+            /usr/local/bin/cfn-init -v \
+              --stack ${AWS::StackName} \
+              --resource LaunchTemplate \
+              --configsets a_full_install \
+              --region ${AWS::Region}
+
+            # Signal completion
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+            
+            echo "User-data script completed at $(date)"
+
+  AutoScalingGroup:
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+        Count: 1
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !ImportValue
+          Fn::Sub: ${ApplicationName}-PrivateSubnetA-ID
+        - !ImportValue
+          Fn::Sub: ${ApplicationName}-PrivateSubnetB-ID
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      DesiredCapacity: !Ref NumInstances
+      MinSize: !Ref NumInstances
+      MaxSize: !Ref NumInstances
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-instance
+          PropagateAtLaunch: true
+
+  # -- SSL Certificate --
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub www.${DomainName}
+        - !Sub frontend.${DomainName}
+        - !Sub backend.${DomainName}
+        - !Sub litellm.${DomainName}
+        - !Sub traefik.${DomainName}
+        - !Sub authelia.${DomainName}
+        - !Sub dex.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub www.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub frontend.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub backend.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub litellm.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub traefik.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub authelia.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub dex.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-certificate
+
+  # -- Application Load Balancer --
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ApplicationName}-alb
+      Scheme: internet-facing
+      Subnets:
+        - !ImportValue
+          Fn::Sub: ${ApplicationName}-PublicSubnetA-ID
+        - !ImportValue
+          Fn::Sub: ${ApplicationName}-PublicSubnetB-ID
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-alb
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ApplicationName}-tg
+      VpcId: !ImportValue
+        Fn::Sub: ${ApplicationName}-VPC-ID
+      Protocol: HTTPS
+      Port: 443
+      HealthCheckProtocol: HTTPS
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200,301,302
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-tg
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref Certificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+
+  # -- DNS Records --
+  DNSRecords:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Ref DomainName
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub www.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub frontend.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub backend.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub litellm.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub traefik.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub authelia.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+        - Name: !Sub dex.${DomainName}
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt AppLoadBalancer.DNSName
+
+Outputs:
+  ALBSecurityGroupId:
+    Description: The ID of the ALB Security Group
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub ${ApplicationName}-ALBSecurityGroup-ID
+
+  InstanceSecurityGroupId:
+    Description: The ID of the Instance Security Group
+    Value: !Ref InstanceSecurityGroup
+    Export:
+      Name: !Sub ${ApplicationName}-InstanceSecurityGroup-ID
+
+  ALBDnsName:
+    Description: The DNS name of the Application Load Balancer
+    Value: !GetAtt AppLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${ApplicationName}-ALB-DNSName
+
+  InstanceRoleArn:
+    Description: The ARN of the IAM Role for EC2 instances
+    Value: !GetAtt EC2InstanceRole.Arn
+    Export:
+      Name: !Sub ${ApplicationName}-InstanceRole-ARN
+
+  AutoScalingGroupName:
+    Description: The name of the Auto Scaling Group
+    Value: !Ref AutoScalingGroup
+    Export:
+      Name: !Sub ${ApplicationName}-ASG-Name
+
+  CertificateArn:
+    Description: The ARN of the SSL certificate
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub ${ApplicationName}-Certificate-ARN
+
+  ApplicationKeyPairId:
+    Description: The ID of the application EC2 Key Pair
+    Value: !Ref ApplicationKeyPair
+    Export:
+      Name: !Sub ${ApplicationName}-AppKeyPair-ID

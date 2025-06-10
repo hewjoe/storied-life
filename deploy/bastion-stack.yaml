@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Bastion host stack for the Storied Life application including
+  bastion launch template, auto scaling group, and DNS record.
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Description: The name of the application.
+    Default: storied-life
+  MySshCidrIp:
+    Type: String
+    Description: The CIDR IP range for SSH access.
+    Default: 24.218.238.112/32
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: Must be a valid IP CIDR range.
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Description: The latest AMI ID for Ubuntu 24.04 LTS.
+    Default: '/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id'
+  BastionInstanceType:
+    Type: String
+    Description: EC2 instance type for the bastion host.
+    Default: t3.nano
+  BastionDesiredCapacity:
+    Type: Number
+    Description: The desired number of bastion instances. Set to 0 to keep it off by default.
+    Default: 0
+    MinValue: 0
+    MaxValue: 1
+  HostedZoneId:
+    Type: String
+    Description: 'Route 53 Hosted Zone ID for creating DNS records (e.g., Z2FDTNDATAQYW2). If you leave this blank, DNS record creation will be skipped.'
+    Default: ''
+  BastionDnsName:
+    Type: String
+    Description: 'The DNS A record for the bastion host.'
+    Default: 'bastion.storied-life.me'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Application Configuration'
+        Parameters:
+          - ApplicationName
+          - MySshCidrIp
+      - Label:
+          default: 'Bastion Configuration'
+        Parameters:
+          - BastionInstanceType
+          - BastionDesiredCapacity
+          - LatestAmiId
+      - Label:
+          default: 'DNS Configuration'
+        Parameters:
+          - HostedZoneId
+          - BastionDnsName
+    ParameterLabels:
+      ApplicationName:
+        default: 'Application Name'
+      MySshCidrIp:
+        default: 'Your SSH IP Address'
+      BastionInstanceType:
+        default: 'Bastion Instance Type'
+      BastionDesiredCapacity:
+        default: 'Bastion Desired Instances'
+      LatestAmiId:
+        default: 'AMI ID'
+      HostedZoneId:
+        default: 'Route 53 Hosted Zone ID'
+      BastionDnsName:
+        default: 'Bastion DNS Name'
+
+Conditions:
+  CreateBastion: !Not [!Equals [!Ref BastionDesiredCapacity, 0]]
+  HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
+
+Resources:
+  # -- EC2 Key Pair --
+  BastionKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${ApplicationName}-bastion-keypair'
+      KeyType: rsa
+      KeyFormat: pem
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-keypair'
+
+  # -- Security Group --
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub '${ApplicationName}-VPC-ID'
+      GroupDescription: 'Allow SSH and VPN access to the bastion host'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref MySshCidrIp
+        - IpProtocol: udp # OpenVPN
+          FromPort: 1194
+          ToPort: 1194
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp # WireGuard
+          FromPort: 51820
+          ToPort: 51820
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-sg'
+
+
+
+  # -- IAM Role and Instance Profile --
+  BastionInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: !Sub '${ApplicationName}-bastion-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogStreams'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: Allow
+                Action:
+                  - 'cloudformation:DescribeStackResource'
+                  - 'cloudformation:SignalResource'
+                Resource: !Ref 'AWS::StackId'
+              - Effect: Allow
+                Action:
+                  - 'route53:ChangeResourceRecordSets'
+                Resource: !Sub 'arn:aws:route53:::hostedzone/${HostedZoneId}'
+                Condition:
+                  Bool:
+                    'aws:SecureTransport': 'true'
+              - Effect: Allow
+                Action:
+                  - 'kms:Decrypt'
+                  - 'kms:DescribeKey'
+                  - 'kms:Encrypt'
+                  - 'kms:GenerateDataKey*'
+                  - 'kms:ReEncrypt*'
+                Resource: 
+                  Fn::ImportValue: !Sub '${ApplicationName}-KmsKey-ARN'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-role'
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref BastionInstanceRole
+
+  # -- Launch Template and Auto Scaling Group --
+  BastionLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub '${ApplicationName}-bastion-launch-template'
+      LaunchTemplateData:
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref BastionInstanceType
+        KeyName: !Ref BastionKeyPair
+        IamInstanceProfile:
+          Arn: !GetAtt BastionInstanceProfile.Arn
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 8
+              VolumeType: gp3
+              Encrypted: true
+              KmsKeyId: 
+                Fn::ImportValue: !Sub '${ApplicationName}-KmsKey-ARN'
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            Groups:
+              - !Ref BastionSecurityGroup
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+        UserData: !Base64
+          'Fn::Sub': |
+            #!/bin/bash -xe
+            # Install necessary packages
+            apt-get update -y
+            apt-get install -y python3-pip unzip
+            pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
+
+            # Start cfn-init
+            /usr/local/bin/cfn-init -v \
+              --stack ${AWS::StackName} \
+              --resource BastionLaunchTemplate \
+              --configsets setup \
+              --region ${AWS::Region}
+
+            # Signal completion
+            /usr/local/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource BastionAutoScalingGroup --region ${AWS::Region}
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "install_awscli"
+            - "update_dns_record"
+        install_awscli:
+          commands:
+            01_install_tools:
+              command: |
+                apt-get update -y
+                apt-get install -y postgresql-client
+                curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                unzip awscliv2.zip
+                ./aws/install
+              cwd: /tmp
+        update_dns_record:
+          commands:
+            01_update_route53:
+              command: !Sub |
+                #!/bin/bash
+                TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+                PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4)
+
+                if [ -z "$PUBLIC_IP" ]; then
+                  echo "Failed to get public IP from instance metadata"
+                  exit 1
+                fi
+
+                CHANGE_BATCH_JSON=$(cat <<EOF
+                {
+                  "Comment": "UPSERT bastion host A record for stack ${AWS::StackName}",
+                  "Changes": [
+                    {
+                      "Action": "UPSERT",
+                      "ResourceRecordSet": {
+                        "Name": "${BastionDnsName}",
+                        "Type": "A",
+                        "TTL": 300,
+                        "ResourceRecords": [
+                          { "Value": "$PUBLIC_IP" }
+                        ]
+                      }
+                    }
+                  ]
+                }
+                EOF
+                )
+
+                aws route53 change-resource-record-sets --hosted-zone-id "${HostedZoneId}" --change-batch "$CHANGE_BATCH_JSON"
+          test: !If [CreateBastion, !If [HasHostedZone, "true", "false"], "false"]
+
+  BastionAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+        Count: !If [CreateBastion, 1, 0]
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub '${ApplicationName}-PublicSubnetA-ID'
+        - Fn::ImportValue: !Sub '${ApplicationName}-PublicSubnetB-ID'
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BastionLaunchTemplate
+        Version: !GetAtt BastionLaunchTemplate.LatestVersionNumber
+      DesiredCapacity: !Ref BastionDesiredCapacity
+      MinSize: '0'
+      MaxSize: '1'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-instance'
+          PropagateAtLaunch: true
+
+Outputs:
+  BastionSecurityGroupId:
+    Description: The ID of the Bastion Security Group
+    Value: !Ref BastionSecurityGroup
+    Export:
+      Name: !Sub '${ApplicationName}-BastionSecurityGroup-ID'
+      
+  BastionAutoScalingGroupName:
+    Description: The name of the Bastion Auto Scaling Group
+    Value: !Ref BastionAutoScalingGroup
+    Export:
+      Name: !Sub '${ApplicationName}-BastionASG-Name'
+      
+  BastionInstanceRoleArn:
+    Description: The ARN of the Bastion IAM Role
+    Value: !GetAtt BastionInstanceRole.Arn
+    Export:
+      Name: !Sub '${ApplicationName}-BastionInstanceRole-ARN'
+
+  BastionKeyPairId:
+    Description: The ID of the bastion EC2 Key Pair
+    Value: !Ref BastionKeyPair
+    Export:
+      Name: !Sub '${ApplicationName}-BastionKeyPair-ID'

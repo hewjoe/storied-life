@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  RDS database stack for the Storied Life application including
+  database instance, subnet group, and secret management.
+
+Parameters:
+  ApplicationName:
+    Type: String
+    Description: The name of the application.
+    Default: storied-life
+  DBInstanceClass:
+    Type: String
+    Description: The instance class for the RDS database.
+    Default: db.t3.micro
+  DBAllocatedStorage:
+    Type: Number
+    Description: The size of the database (in GB).
+    Default: 20
+  DBName:
+    Type: String
+    Description: The name of the database to create. This is ignored if restoring from a snapshot.
+    Default: 'storiedlife'
+  DBSnapshotIdentifier:
+    Type: String
+    Description: 'Optional. The identifier for the DB snapshot to restore from. If you specify this, DBName is ignored.'
+    Default: ''
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Application Configuration'
+        Parameters:
+          - ApplicationName
+      - Label:
+          default: 'Database Configuration'
+        Parameters:
+          - DBInstanceClass
+          - DBAllocatedStorage
+          - DBName
+          - DBSnapshotIdentifier
+    ParameterLabels:
+      ApplicationName:
+        default: 'Application Name'
+      DBInstanceClass:
+        default: 'Database Instance Class'
+      DBAllocatedStorage:
+        default: 'Database Storage (GB)'
+      DBName:
+        default: 'Database Name'
+      DBSnapshotIdentifier:
+        default: 'Database Snapshot ID'
+
+Conditions:
+  RestoreFromDBSnapshot: !Not [!Equals [!Ref DBSnapshotIdentifier, '']]
+
+Resources:
+  # -- Security Group --
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: 
+        Fn::ImportValue: !Sub '${ApplicationName}-VPC-ID'
+      GroupDescription: 'Allow database connections from the application (ingress rules added by app stack)'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db-sg'
+
+  # -- Database Subnet Group --
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: 'Subnet group for the RDS instance'
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${ApplicationName}-PrivateSubnetA-ID'
+        - Fn::ImportValue: !Sub '${ApplicationName}-PrivateSubnetB-ID'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db-subnet-group'
+
+  # -- Database Secret --
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ApplicationName}/db-credentials'
+      Description: 'Database credentials for the application'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "postgres"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
+  # -- RDS Database Instance --
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      Engine: postgres
+      EngineVersion: '16.9'
+      PubliclyAccessible: false
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBName: !If [RestoreFromDBSnapshot, !Ref 'AWS::NoValue', !Ref DBName]
+      MasterUsername: !Join ['', [ '{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', [ '{{resolve:secretsmanager:', !Ref DBSecret, ':SecretString:password}}' ]]
+      DBSnapshotIdentifier: !If [RestoreFromDBSnapshot, !Ref DBSnapshotIdentifier, !Ref 'AWS::NoValue']
+      StorageEncrypted: true
+      KmsKeyId: 
+        Fn::ImportValue: !Sub '${ApplicationName}-KmsKey-ARN'
+      DeletionProtection: false
+      BackupRetentionPeriod: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-db'
+
+Outputs:
+  RDSSecurityGroupId:
+    Description: The ID of the RDS Security Group
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub '${ApplicationName}-RDSSecurityGroup-ID'
+      
+  DatabaseEndpointAddress:
+    Description: 'The connection endpoint for the database'
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${ApplicationName}-Database-Endpoint'
+      
+  DatabaseEndpointPort:
+    Description: 'The connection port for the database'
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub '${ApplicationName}-Database-Port'
+      
+  DatabaseSecretArn:
+    Description: 'The ARN of the secret containing database credentials'
+    Value: !Ref DBSecret
+    Export:
+      Name: !Sub '${ApplicationName}-Database-Secret-ARN'
+      
+  DBSubnetGroupName:
+    Description: 'The name of the database subnet group'
+    Value: !Ref DBSubnetGroup
+    Export:
+      Name: !Sub '${ApplicationName}-DB-SubnetGroup-Name' 
