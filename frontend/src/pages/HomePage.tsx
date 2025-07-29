@@ -4,10 +4,10 @@ import { HeartIcon, BookOpenIcon, ChatBubbleLeftRightIcon } from '@heroicons/rea
 export default function HomePage() {
   const features = [
     {
-      name: 'Digital Memorials',
-      description: 'Create beautiful, lasting memorials to honor and remember your loved ones.',
+      name: 'Digital Legacies',
+      description: 'Create beautiful, lasting legacies to honor and remember your loved ones.',
       icon: HeartIcon,
-      href: '/memorials',
+      href: '/legacies',
     },
     {
       name: 'Share Stories',
@@ -38,15 +38,15 @@ export default function HomePage() {
               <span className="text-blue-600">Honoring legacies.</span>
             </h1>
             <p className="mt-6 text-lg leading-8 text-gray-600">
-              Create digital memorials, share stories, and keep the memory of your loved ones alive 
-              through our AI-powered platform. Every story matters. Every memory counts.
+              Create digital legacies, share stories, and keep the memory of your loved ones alive 
+              through our AI-powered platform that preserves their essence forever.
             </p>
-            <div className="mt-10 flex items-center justify-center gap-x-6">
+            <div className="mt-6 flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                to="/memorials"
-                className="rounded-md bg-blue-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                to="/legacies"
+                className="bg-primary-600 text-white px-6 py-3 rounded-lg hover:bg-primary-700 transition-colors font-medium text-center"
               >
-                Create Memorial
+                Create Legacy
               </Link>
               <Link
                 to="/stories"
@@ -72,7 +72,7 @@ export default function HomePage() {
               Keep memories alive forever
             </p>
             <p className="mt-6 text-lg leading-8 text-gray-600">
-              Our platform provides all the tools you need to create meaningful digital memorials, 
+              Our platform provides all the tools you need to create meaningful digital legacies, 
               share precious stories, and connect with the memories of those you love.
             </p>
           </div>
@@ -114,11 +114,11 @@ export default function HomePage() {
             </h2>
             <p className="mx-auto mt-6 max-w-xl text-lg leading-8 text-blue-100">
               Join families around the world who are keeping their loved ones' stories alive. 
-              Create your first memorial and begin the journey of remembrance.
+              Create your first legacy and begin the journey of remembrance.
             </p>
             <div className="mt-10 flex items-center justify-center gap-x-6">
               <Link
-                to="/memorials"
+                to="/legacies"
                 className="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-blue-600 shadow-sm hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
               >
                 Get started

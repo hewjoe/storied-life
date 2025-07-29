@@ -2,14 +2,14 @@
 
 > *Preserving memories. Honoring legacies. Connecting families.*
 
-An open-source digital memorial platform that captures, organizes, and preserves the stories and memories of deceased loved ones through AI-powered interactive experiences.
+An open-source digital legacy platform that captures, organizes, and preserves the stories and memories of loved ones through AI-powered interactive experiences.
 
 ## 🌟 Vision
 
 Storied Life creates a lasting digital legacy by:
 - Capturing authentic stories from family and friends
 - Preserving personalities through AI-powered personas  
-- Providing interactive memorial experiences
+- Providing interactive legacy experiences
 - Maintaining complete data ownership and privacy
 - Supporting both self-hosted and managed deployments
 
@@ -32,8 +32,8 @@ Storied Life creates a lasting digital legacy by:
 
 ### Prerequisites
 - Docker and Docker Compose
-- Node.js 18+ (for local development)
-- Python 3.11+ (for local development)
+- Node.js 20+ with nvm (for local development)
+- Python 3.11+ with uv (for local development)
 
 ### Self-Hosted Deployment
 
@@ -54,20 +54,25 @@ Visit `http://localhost` to access your Storied Life instance.
 git clone https://github.com/your-org/storied-life.git
 cd storied-life
 
-# Backend setup
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+# Quick setup with Makefile
+make setup           # Initial project setup
+make nvm-setup       # Setup Node.js environment with nvm
+make nvm-check       # Verify nvm and Node.js setup
 
-# Frontend setup  
-cd ../frontend
+# Manual backend setup (with uv)
+cd backend
+uv sync              # Install dependencies with uv
+uv run python main.py
+
+# Manual frontend setup (with nvm)
+cd frontend
+nvm use              # Use Node.js version from .nvmrc
 npm install
 
-# Start development servers
-docker-compose -f docker-compose.dev.yml up -d  # Database services
-cd backend && uvicorn main:app --reload --host 0.0.0.0 --port 8000
-cd frontend && npm run dev
+# Start development environment
+make start-dev       # Docker services + development containers
+# OR start individual services
+make start           # Production-like environment
 ```
 
 ## 📁 Project Structure
@@ -86,14 +91,14 @@ storied-life/
 ## 🏗️ Architecture
 
 ### Technology Stack
-- **Backend**: FastAPI (Python), PostgreSQL, Neo4J
-- **Frontend**: React + TypeScript, Tailwind CSS, Vite
+- **Backend**: FastAPI (Python 3.11+), PostgreSQL, Neo4J, managed with `uv`
+- **Frontend**: React + TypeScript, Tailwind CSS, Vite, managed with `nvm`
 - **AI**: LiteLLM proxy supporting OpenAI, Anthropic, Gemini, Ollama
 - **Infrastructure**: Docker, Traefik, Authelia
 - **Storage**: S3-compatible or local filesystem
 
 ### Database Design
-- **PostgreSQL**: Primary relational data (users, stories, memorials)
+- **PostgreSQL**: Primary relational data (users, stories, legacies)
 - **Neo4J**: Relationship graphs and social connections
 - **Redis**: Caching and session management
 

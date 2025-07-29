@@ -3,15 +3,20 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PATH="/app/.venv/bin:$PATH"
 
-# Install system dependencies including curl for healthcheck
+# Install system dependencies including curl for healthcheck and uv
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     libmagic1 \
     curl \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && rm -rf /var/lib/apt/lists/*
+
+# Add uv to PATH
+ENV PATH="/root/.local/bin:$PATH"
 
 # Create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
@@ -20,15 +25,17 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser
 WORKDIR /app
 
 # Copy and install Python dependencies
-COPY requirements.txt requirements.dev.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements.dev.txt
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen
 
 # Copy application code
 # Note: These will be overridden by volume mounts in development
 COPY . .
 
-# Create uploads directory
-RUN mkdir -p uploads && chown -R appuser:appuser /app
+# Create uploads directory and set proper permissions
+RUN mkdir -p uploads && \
+    mkdir -p /home/appuser/.cache && \
+    chown -R appuser:appuser /app /home/appuser
 
 # Switch to non-root user
 USER appuser

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   VPC infrastructure stack for the Storied Life application including
-  VPC, subnets, security groups, S3 bucket, and KMS key.
+  VPC, subnets, security groups, S3 bucket, KMS key, and SSL certificate.
 
 Parameters:
   ApplicationName:
@@ -14,6 +14,17 @@ Parameters:
     Default: 24.218.238.112/32
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: Must be a valid IP CIDR range.
+  HostedZoneId:
+    Type: String
+    Description: Route 53 Hosted Zone ID for certificate validation (e.g., Z2FDTNDATAQYW2).
+  DomainName:
+    Type: String
+    Description: The domain name for the application (e.g., storied-life.me).
+    Default: storied-life.me
+  Subdomains:
+    Type: CommaDelimitedList
+    Description: Comma-separated list of subdomains for the application.
+    Default: frontend,backend,litellm,traefik,authentik
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -23,11 +34,23 @@ Metadata:
         Parameters:
           - ApplicationName
           - MySshCidrIp
+      - Label:
+          default: 'Certificate Configuration'
+        Parameters:
+          - HostedZoneId
+          - DomainName
+          - Subdomains
     ParameterLabels:
       ApplicationName:
         default: 'Application Name'
       MySshCidrIp:
         default: 'Your SSH IP Address'
+      HostedZoneId:
+        default: 'Route 53 Hosted Zone ID'
+      DomainName:
+        default: 'Domain Name'
+      Subdomains:
+        default: 'Application Subdomains'
 
 Resources:
   # -- Networking Resources --
@@ -167,13 +190,43 @@ Resources:
       SubnetId: !Ref PrivateSubnetB
       RouteTableId: !Ref PrivateRouteTable
 
-
+  # -- SSL Certificate --
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub www.${DomainName}
+        - !Sub frontend.${DomainName}
+        - !Sub backend.${DomainName}
+        - !Sub litellm.${DomainName}
+        - !Sub traefik.${DomainName}
+        - !Sub authentik.${DomainName}
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub www.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub frontend.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub backend.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub litellm.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub traefik.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+        - DomainName: !Sub authentik.${DomainName}
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ApplicationName}-certificate
 
   # -- KMS Key for Encryption --
   KmsKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: KMS key for encrypting EBS volumes
+      Description: KMS key for encrypting EBS volumes and S3 objects
       EnableKeyRotation: true
       KeyPolicy:
         Version: '2012-10-17'
@@ -190,6 +243,32 @@ Resources:
             Principal:
               Service: 
                 - ec2.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey*'
+              - 'kms:ReEncrypt*'
+              - 'kms:CreateGrant'
+            Resource: '*'
+          - Sid: 'Allow S3 Service to use the key for object encryption'
+            Effect: Allow
+            Principal:
+              Service: 
+                - s3.amazonaws.com
+            Action:
+              - 'kms:Decrypt'
+              - 'kms:DescribeKey'
+              - 'kms:Encrypt'
+              - 'kms:GenerateDataKey*'
+              - 'kms:ReEncrypt*'
+              - 'kms:CreateGrant'
+            Resource: '*'
+          - Sid: 'Allow VPC Flow Logs to use the key for S3 encryption'
+            Effect: Allow
+            Principal:
+              Service: 
+                - vpc-flow-logs.amazonaws.com
             Action:
               - 'kms:Decrypt'
               - 'kms:DescribeKey'
@@ -233,7 +312,8 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref KmsKey
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -242,6 +322,181 @@ Resources:
       Tags:
         - Key: Name
           Value: !Ref ApplicationName
+
+  # -- EC2 Key Pairs --
+  BastionKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${ApplicationName}-bastion-keypair'
+      KeyType: rsa
+      KeyFormat: pem
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-bastion-keypair'
+
+  # -- CloudWatch Log Group for Flow Logs --
+  FlowLogLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/flowlogs/${ApplicationName}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-flowlogs'
+
+  # -- IAM Role for Flow Logs --
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'vpc-flow-logs.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Sub '${ApplicationName}-flowlog-policy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ApplicationName}-flowlog-role'
+
+  # -- VPC Flow Logs --
+  FlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: 'cloud-watch-logs'
+      LogGroupName: !Ref FlowLogLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+      MaxAggregationInterval: 600
+      Tags:
+        - Key: Name
+          Value: !Ref ApplicationName
+
+  # -- SSM Parameter Store Values --
+  VpcIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/vpc-id'
+      Type: String
+      Value: !Ref VPC
+      Description: VPC ID for the application infrastructure
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  PublicSubnetAParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/public-subnet-a'
+      Type: String
+      Value: !Ref SubnetA
+      Description: Public Subnet A ID
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  PublicSubnetBParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/public-subnet-b'
+      Type: String
+      Value: !Ref SubnetB
+      Description: Public Subnet B ID
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  PrivateSubnetAParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/private-subnet-a'
+      Type: String
+      Value: !Ref PrivateSubnetA
+      Description: Private Subnet A ID
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  PrivateSubnetBParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/private-subnet-b'
+      Type: String
+      Value: !Ref PrivateSubnetB
+      Description: Private Subnet B ID
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  KmsKeyArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/kms-key-arn'
+      Type: String
+      Value: !GetAtt KmsKey.Arn
+      Description: KMS Key ARN for volume encryption
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  S3BucketNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/s3-bucket-name'
+      Type: String
+      Value: !Ref S3Bucket
+      Description: S3 Bucket name for application data
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  CertificateArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/certificate-arn'
+      Type: String
+      Value: !Ref Certificate
+      Description: SSL Certificate ARN
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  BastionKeyPairParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/bastion-key-pair'
+      Type: String
+      Value: !Ref BastionKeyPair
+      Description: Bastion host EC2 Key Pair name
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
+
+  FlowLogLogGroupParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/app/${ApplicationName}/flowlog-log-group'
+      Type: String
+      Value: !Ref FlowLogLogGroup
+      Description: CloudWatch Log Group name for VPC Flow Logs
+      Tags:
+        Application: !Ref ApplicationName
+        Environment: Production
 
 Outputs:
   VPCId:
@@ -285,4 +540,16 @@ Outputs:
     Description: The name of the S3 bucket for application data
     Value: !Ref S3Bucket
     Export:
-      Name: !Sub '${ApplicationName}-S3Bucket-Name' 
+      Name: !Sub '${ApplicationName}-S3Bucket-Name'
+
+  CertificateArn:
+    Description: The ARN of the SSL certificate
+    Value: !Ref Certificate
+    Export:
+      Name: !Sub '${ApplicationName}-Certificate-ARN'
+
+  BastionKeyPairId:
+    Description: The ID of the bastion EC2 Key Pair
+    Value: !Ref BastionKeyPair
+    Export:
+      Name: !Sub '${ApplicationName}-BastionKeyPair-ID' 

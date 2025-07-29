@@ -1,6 +1,9 @@
 import { ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { HeartIcon, BookOpenIcon, ChatBubbleLeftRightIcon, HomeIcon } from '@heroicons/react/24/outline'
+import { useAuth } from '../contexts/AuthContext'
+import LoginButton from './Auth/LoginButton'
+import UserProfile from './Auth/UserProfile'
 
 interface LayoutProps {
   children: ReactNode
@@ -8,10 +11,11 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
+  const { isAuthenticated, isLoading, error } = useAuth()
 
   const navigation = [
     { name: 'Home', href: '/', icon: HomeIcon },
-    { name: 'Memorials', href: '/memorials', icon: HeartIcon },
+    { name: 'Legacies', href: '/legacies', icon: HeartIcon },
     { name: 'Stories', href: '/stories', icon: BookOpenIcon },
     { name: 'AI Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
   ]
@@ -54,11 +58,25 @@ export default function Layout({ children }: LayoutProps) {
               </div>
             </div>
 
-            {/* User menu placeholder */}
+            {/* User menu */}
             <div className="flex items-center">
-              <button className="btn-primary">
-                Sign In
-              </button>
+              {/* Debug info */}
+              <div className="mr-2 text-xs text-gray-500">
+                Loading: {isLoading ? 'true' : 'false'} | Auth: {isAuthenticated ? 'true' : 'false'}
+              </div>
+              
+              {error && (
+                <div className="mr-4 text-red-600 text-sm max-w-xs truncate">
+                  {error}
+                </div>
+              )}
+              {isLoading ? (
+                <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse"></div>
+              ) : isAuthenticated ? (
+                <UserProfile showAuthMethod={false} />
+              ) : (
+                <LoginButton size="md" />
+              )}
             </div>
           </div>
         </div>
@@ -73,7 +91,7 @@ export default function Layout({ children }: LayoutProps) {
       <footer className="bg-white border-t border-gray-200">
         <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
           <div className="text-center text-gray-500">
-            <p>&copy; 2024 Storied Life. Preserving memories. Honoring legacies.</p>
+            <p>&copy; 2025 Storied Life. Preserving memories. Honoring legacies.</p>
           </div>
         </div>
       </footer>

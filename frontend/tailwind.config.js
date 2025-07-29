@@ -7,7 +7,7 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Memorial-appropriate color palette
+        // Legacy-appropriate color palette
         primary: {
           50: '#f0f9ff',
           100: '#e0f2fe',
@@ -44,7 +44,7 @@ export default {
           800: '#262626',
           900: '#171717',
         },
-        // Semantic colors for memorial context
+        // Semantic colors for legacy context
         memory: {
           50: '#fefce8',
           100: '#fef9c3',

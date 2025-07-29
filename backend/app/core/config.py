@@ -31,11 +31,39 @@ class Settings(BaseSettings):
     
     @validator("CORS_ORIGINS", pre=True)
     def assemble_cors_origins(cls, v: Any) -> List[str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
+        if isinstance(v, str):
+            # Handle empty string or whitespace-only string
+            if not v.strip():
+                return [
+                    "http://localhost:3000",
+                    "http://localhost:3001",
+                    "http://vision.projecthewitt.info:3001",
+                    "http://vision.projecthewitt.info:8000",
+                    "http://vision.projecthewitt.info:8001",
+                    "https://api.projecthewitt.info:3001",
+                    "https://remember.projecthewitt.info",
+                    "https://remember.projecthewitt.info",
+                    "http://localhost:5173",
+                ]
+            # Handle JSON array format
+            if v.startswith("["):
+                import json
+                return json.loads(v)
+            # Handle comma-separated format
+            return [i.strip() for i in v.split(",") if i.strip()]
+        elif isinstance(v, list):
             return v
-        raise ValueError(v)
+        elif v is None:
+            # Return default values if None
+            return [
+                "http://localhost:3000",
+                "http://localhost:3001",
+                "http://vision.projecthewitt.info:3001",
+                "http://vision.projecthewitt.info:8000",
+                "http://vision.projecthewitt.info:8001",
+                "http://localhost:5173",
+            ]
+        raise ValueError(f"Cannot parse CORS_ORIGINS: {v}")
     
     # Security settings
     ALLOWED_HOSTS: List[str] = ["*"]
@@ -74,10 +102,26 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: Optional[str] = None
     SMTP_FROM_NAME: str = "Storied Life"
     
-    # Authentication
-    AUTHELIA_URL: Optional[str] = None
+    # Authentication (Legacy JWT)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
     ALGORITHM: str = "HS256"  # JWT algorithm
+    
+    # OIDC Configuration
+    AUTH_PROVIDER: str = "authentik"  # "authentik" | "cognito"
+    OIDC_ISSUER_URL: str = "https://auth.storied-life.me/application/o/storied-life/"
+    OIDC_CLIENT_ID: str = "storied-life-web"
+    OIDC_CLIENT_SECRET: Optional[str] = None  # Only needed for confidential clients
+    OIDC_AUDIENCE: str = "storied-life-api"
+    OIDC_SCOPES: str = "openid profile email"
+    OIDC_JWKS_CACHE_TTL: int = 3600  # 1 hour
+    
+    # Provider-specific settings
+    COGNITO_USER_POOL_ID: Optional[str] = None
+    COGNITO_REGION: str = "us-east-1"
+    
+    # Legacy Authentik (for migration)
+    AUTHENTIK_URL: Optional[str] = None
+    AUTHENTIK_HOST: str = "auth.storied-life.me"
     
     # Feature flags
     FEATURE_SMS_INTEGRATION: bool = False

@@ -1,15 +1,15 @@
-# Digital Memorial Platform - Comprehensive Project Plan
+# Digital Legacy Platform - Comprehensive Project Plan
 
 ## Project Overview
 
-The Digital Memorial Platform is an open-source application designed to preserve, organize, and interact with memories and stories of deceased loved ones. The platform enables families to capture stories through multiple input methods, browse and organize these memories, and interact with AI-powered personas based on the collected stories.
+The Digital Legacy Platform is an open-source application designed to preserve, organize, and interact with memories and stories of loved ones. The platform enables families to capture stories through multiple input methods, browse and organize these memories, and interact with AI-powered personas based on the collected stories.
 
 ## Core Vision
 
 Create a digital legacy preservation system that:
 - Captures authentic stories and memories from family and friends
-- Preserves the essence and personality of the deceased through AI personas
-- Provides a lasting, interactive memorial that grows over time
+- Preserves the essence and personality of individuals through AI personas
+- Provides a lasting, interactive legacy that grows over time
 - Offers both self-hosted and managed hosting options
 - Maintains strict privacy controls and data ownership
 
@@ -21,7 +21,7 @@ Create a digital legacy preservation system that:
   - PostgreSQL (primary relational data)
   - Neo4J (relationship graphs, social connections)
 - **AI Integration**: LiteLLM proxy (OpenAI, Anthropic, Gemini, Ollama, Bedrock)
-- **Authentication**: Authelia (via Traefik)
+- **Authentication**: Authentik/Cognito (via OIDC)
 - **Reverse Proxy**: Traefik with SSL
 
 ### Frontend Stack
@@ -52,10 +52,10 @@ Create a digital legacy preservation system that:
 - privacy_preferences
 ```
 
-#### Memorials
+#### Legacies
 ```sql
 - id (UUID, primary key)
-- deceased_name
+- person_name
 - birth_date
 - death_date
 - description
@@ -68,7 +68,7 @@ Create a digital legacy preservation system that:
 #### Stories
 ```sql
 - id (UUID, primary key)
-- memorial_id
+- legacy_id
 - submitted_by (user_id)
 - title
 - content (text)
@@ -84,7 +84,7 @@ Create a digital legacy preservation system that:
 #### Groups
 ```sql
 - id (UUID, primary key)
-- memorial_id
+- legacy_id
 - name (e.g., "Family", "Coworkers", "College Friends")
 - description
 - created_by
@@ -94,7 +94,7 @@ Create a digital legacy preservation system that:
 #### AI_Conversations
 ```sql
 - id (UUID, primary key)
-- memorial_id
+- legacy_id
 - user_id
 - conversation_history (JSON)
 - created_at
@@ -106,12 +106,12 @@ Create a digital legacy preservation system that:
 // Nodes
 (:Person {id, name, relationship_type})
 (:Story {id, title, content, tags})
-(:Memorial {id, name})
+(:Legacy {id, name})
 
 // Relationships
 (:Person)-[:KNEW]->(:Person)
 (:Person)-[:SUBMITTED]->(:Story)
-(:Story)-[:ABOUT]->(:Memorial)
+(:Story)-[:ABOUT]->(:Legacy)
 (:Person)-[:WORKED_WITH]->(:Person)
 (:Person)-[:FAMILY_OF]->(:Person)
 ```
@@ -131,7 +131,7 @@ Create a digital legacy preservation system that:
 - **Registration**: Email-based registration
 - **Authentication**: Session-based login
 - **Profile Management**: Basic user profiles with relationship info
-- **Admin Functions**: Story approval, user management, memorial settings
+- **Admin Functions**: Story approval, user management, legacy settings
 
 #### 3. AI Chat Interface
 - **Simple Chat**: Text-based conversation with AI persona
@@ -139,8 +139,8 @@ Create a digital legacy preservation system that:
 - **Memory Integration**: Reference specific stories in responses
 - **Personality Modeling**: Basic persona derived from story content
 
-#### 4. Memorial Administration
-- **Memorial Setup**: Create memorial with basic info and photos
+#### 4. Legacy Administration
+- **Legacy Setup**: Create legacy with basic info and photos
 - **Story Moderation**: Review and approve submitted stories
 - **User Permissions**: Manage user access and roles
 - **Basic Analytics**: Story counts, user activity
@@ -148,7 +148,7 @@ Create a digital legacy preservation system that:
 #### 5. User Interface
 - **Responsive Design**: Mobile-friendly interface
 - **Minimalist Aesthetic**: Clean, respectful design
-- **Photo Integration**: Display memorial photos
+- **Photo Integration**: Display legacy photos
 - **Navigation**: Intuitive story browsing and chat access
 
 ### Extended Features (Phase 2+)
@@ -200,12 +200,12 @@ Create a digital legacy preservation system that:
 ### Privacy-Aware AI
 ```python
 # Pseudo-code for AI interaction
-def generate_response(user_id, message, memorial_id):
+def generate_response(user_id, message, legacy_id):
     # Get user's accessible stories
-    accessible_stories = get_user_accessible_stories(user_id, memorial_id)
+    accessible_stories = get_user_accessible_stories(user_id, legacy_id)
     
     # Generate persona from all stories (for personality)
-    full_persona = generate_persona(get_all_stories(memorial_id))
+    full_persona = generate_persona(get_all_stories(legacy_id))
     
     # Use MCP agent to query only accessible stories for examples
     relevant_memories = mcp_agent.query(accessible_stories, message)
@@ -227,7 +227,7 @@ def generate_response(user_id, message, memorial_id):
 ## Development Roadmap
 
 ### Phase 1: MVP (Months 1-3)
-**Goal**: Basic functional memorial platform
+**Goal**: Basic functional legacy platform
 
 #### Month 1: Foundation
 - [ ] Project setup and Docker configuration
@@ -241,7 +241,7 @@ def generate_response(user_id, message, memorial_id):
 - [ ] User management and admin functions
 - [ ] Basic AI chat integration
 - [ ] Simple story browsing interface
-- [ ] Memorial setup and management
+- [ ] Legacy setup and management
 
 #### Month 3: Polish and Testing
 - [ ] UI/UX refinement
@@ -312,8 +312,8 @@ def generate_response(user_id, message, memorial_id):
 ### API Design
 ```yaml
 # Key API endpoints
-/api/v1/memorials/{memorial_id}/stories
-/api/v1/memorials/{memorial_id}/chat
+/api/v1/legacies/{legacy_id}/stories
+/api/v1/legacies/{legacy_id}/chat
 /api/v1/users/profile
 /api/v1/admin/stories/pending
 /api/v1/groups
@@ -392,6 +392,6 @@ services:
 
 ## Conclusion
 
-This Digital Memorial Platform represents a meaningful intersection of technology and human connection, providing families with a lasting way to preserve and interact with the memories of their loved ones. The phased approach ensures a solid foundation while building toward an ambitious vision that leverages modern AI capabilities in a responsible, privacy-conscious manner.
+This Digital Legacy Platform represents a meaningful intersection of technology and human connection, providing families with a lasting way to preserve and interact with the memories of their loved ones. The phased approach ensures a solid foundation while building toward an ambitious vision that leverages modern AI capabilities in a responsible, privacy-conscious manner.
 
-The open-source nature of the project ensures that families maintain control over their most precious memories while contributing to a tool that can help others through their grief journey. By starting with a focused MVP and expanding systematically, this platform can grow into a comprehensive digital legacy preservation system that honors the deceased while supporting the living.
+The open-source nature of the project ensures that families maintain control over their most precious memories while contributing to a tool that can help others through their grief journey. By starting with a focused MVP and expanding systematically, this platform can grow into a comprehensive digital legacy preservation system that honors individuals while supporting their loved ones.

@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/", response_model=StoryList)
 async def get_stories(
-    memorial_id: Optional[UUID] = Query(None, description="Filter by memorial ID"),
+    legacy_id: Optional[UUID] = Query(None, description="Filter by legacy ID"),
     skip: int = Query(0, ge=0, description="Number of stories to skip"),
     limit: int = Query(20, ge=1, le=100, description="Number of stories to return"),
     search: Optional[str] = Query(None, description="Search in story content"),
@@ -29,7 +29,7 @@ async def get_stories(
     """
     Retrieve stories with optional filtering and pagination.
     
-    - **memorial_id**: Filter stories for a specific memorial
+    - **legacy_id**: Filter stories for a specific legacy
     - **skip**: Number of stories to skip (for pagination)
     - **limit**: Maximum number of stories to return
     - **search**: Search term to filter stories by content
@@ -39,7 +39,7 @@ async def get_stories(
     
     stories, total = await story_service.get_stories(
         user_id=current_user.id,
-        memorial_id=memorial_id,
+        legacy_id=legacy_id,
         skip=skip,
         limit=limit,
         search=search,
@@ -89,17 +89,17 @@ async def create_story(
     
     - **title**: Story title
     - **content**: Story content/text
-    - **memorial_id**: ID of the memorial this story belongs to
+    - **legacy_id**: ID of the legacy this story belongs to
     - **tags**: Optional list of tags
     - **visibility_level**: Story visibility (public, private, group)
     """
     story_service = StoryService(db)
     
-    # Verify user has permission to add stories to this memorial
-    if not await story_service.can_user_add_story(current_user.id, story_data.memorial_id):
+    # Verify user has permission to add stories to this legacy
+    if not await story_service.can_user_add_story(current_user.id, story_data.legacy_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to add stories to this memorial"
+            detail="Not authorized to add stories to this legacy"
         )
     
     story = await story_service.create_story(story_data, current_user.id)
@@ -185,8 +185,8 @@ async def approve_story(
     """
     story_service = StoryService(db)
     
-    # Verify user is admin for the memorial
-    if not await story_service.is_user_memorial_admin(current_user.id, story_id):
+    # Verify user is admin for the legacy
+    if not await story_service.is_user_legacy_admin(current_user.id, story_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to approve stories"

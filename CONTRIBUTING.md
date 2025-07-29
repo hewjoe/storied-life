@@ -177,7 +177,7 @@ test('renders story list', async () => {
 ## 🔒 Security Considerations
 
 - **Sensitive Data**: Never commit secrets, API keys, or personal data
-- **Privacy**: Respect the sensitive nature of memorial content
+- **Privacy**: Respect the sensitive nature of legacy content
 - **Dependencies**: Keep dependencies updated and secure
 - **Access Control**: Test permission boundaries thoroughly
 - **AI Safety**: Ensure AI responses are appropriate and respectful
@@ -202,7 +202,7 @@ For new features:
 1. **Check existing issues** to avoid duplicates
 2. **Describe the use case** and user benefit
 3. **Consider implementation** complexity
-4. **Respect project scope** and memorial context
+4. **Respect project scope** and legacy context
 5. **Propose solutions** when possible
 
 Use the feature request template in GitHub Issues.

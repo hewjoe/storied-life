@@ -1,67 +1,20 @@
-version: '3.8'
 
 services:
-  # Reverse Proxy and SSL Termination
-  traefik:
-    image: traefik:v3.0
-    container_name: storied-life-traefik
-    command:
-      - --api.insecure=true
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
-      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@example.com}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --log.level=INFO
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"  # Traefik dashboard
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik-letsencrypt:/letsencrypt
-    networks:
-      - storied-life
-    restart: unless-stopped
-
-  # Authentication Service
-  authelia:
-    image: authelia/authelia:latest
-    container_name: storied-life-authelia
-    volumes:
-      - ./authelia:/config
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.authelia.rule=Host(`auth.${DOMAIN:-localhost}`)"
-      - "traefik.http.routers.authelia.entrypoints=websecure"
-      - "traefik.http.routers.authelia.tls.certresolver=letsencrypt"
-      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
-    environment:
-      - AUTHELIA_JWT_SECRET=${AUTHELIA_JWT_SECRET}
-      - AUTHELIA_SESSION_SECRET=${AUTHELIA_SESSION_SECRET}
-      - AUTHELIA_STORAGE_ENCRYPTION_KEY=${AUTHELIA_STORAGE_ENCRYPTION_KEY}
-    depends_on:
-      - redis
-      - postgres
-    networks:
-      - storied-life
-    restart: unless-stopped
-
   # Frontend Application
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+        - VITE_API_URL=${VITE_API_URL:-https://remember.storied-life.me}
     container_name: storied-life-frontend
+    env_file:
+      - .env
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.frontend.rule=Host(`remember.storied-life.me`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.tls=true"
       - "traefik.http.services.frontend.loadbalancer.server.port=80"
     networks:
       - storied-life
@@ -73,118 +26,60 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: storied-life-backend
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-storied}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-storied_life}
-      - NEO4J_URI=bolt://neo4j:7687
-      - NEO4J_USERNAME=${NEO4J_USERNAME:-neo4j}
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - REDIS_URL=redis://redis:6379
-      - LITELLM_URL=http://litellm:4000
-      - SECRET_KEY=${SECRET_KEY}
-      - AUTHELIA_URL=http://authelia:9091
-      - STORAGE_TYPE=${STORAGE_TYPE:-local}
-      - S3_BUCKET=${S3_BUCKET:-}
-      - S3_REGION=${S3_REGION:-}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+    env_file:
+      - .env
     volumes:
       - ./data/uploads:/app/uploads
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN:-localhost}`) || PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN:-storied-life.me}`) || PathPrefix(`/api`)"
       - "traefik.http.routers.backend.entrypoints=websecure"
-      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.backend.tls=true"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
     depends_on:
       - postgres
-      - neo4j
       - redis
-      - litellm
     networks:
       - storied-life
     restart: unless-stopped
 
-  # AI Proxy Service
-  litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    container_name: storied-life-litellm
-    environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-storied}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-storied_life}
-    volumes:
-      - ./litellm/config.yaml:/app/config.yaml
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
-    networks:
-      - storied-life
-    restart: unless-stopped
-
-  # PostgreSQL Database
+  # PostgreSQL Database for Application
   postgres:
-    image: postgres:15
-    container_name: storied-life-postgres
+    image: postgres:17-alpine
+    container_name: storied-life-app-postgres
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-storied_life}
-      - POSTGRES_USER=${POSTGRES_USER:-storied}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      - POSTGRES_DB=${APP_POSTGRES_DB:-storied_life_app}
+      - POSTGRES_USER=${APP_POSTGRES_USER:-storied_app}
+      - POSTGRES_PASSWORD=${APP_POSTGRES_PASSWORD}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - app-postgres-data:/var/lib/postgresql/data
       - ./database/init:/docker-entrypoint-initdb.d
-    ports:
-      - "5432:5432"
     networks:
       - storied-life
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-storied} -d ${POSTGRES_DB:-storied_life}"]
+      test: ["CMD-SHELL", "pg_isready -U ${APP_POSTGRES_USER:-storied_app} -d ${APP_POSTGRES_DB:-storied_life_app}"]
       interval: 30s
       timeout: 10s
       retries: 3
 
-  # Neo4J Graph Database
-  neo4j:
-    image: neo4j:5.15
-    container_name: storied-life-neo4j
-    environment:
-      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD}
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_apoc_export_file_enabled=true
-      - NEO4J_apoc_import_file_enabled=true
-      - NEO4J_apoc_import_file_use__neo4j__config=true
-    volumes:
-      - neo4j-data:/data
-      - neo4j-logs:/logs
-      - neo4j-import:/var/lib/neo4j/import
-      - neo4j-plugins:/plugins
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    networks:
-      - storied-life
-    restart: unless-stopped
-
-  # Redis Cache
+  # Redis Cache for Application
   redis:
-    image: redis:7-alpine
-    container_name: storied-life-redis
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    image: redis:8-alpine
+    container_name: storied-life-app-redis
+    command: redis-server --appendonly yes --requirepass ${APP_REDIS_PASSWORD:-}
+    environment:
+      - REDIS_PASSWORD=${APP_REDIS_PASSWORD:-}
     volumes:
-      - redis-data:/data
-    ports:
-      - "6379:6379"
+      - app-redis-data:/data
     networks:
       - storied-life
     restart: unless-stopped
 
 volumes:
-  postgres-data:
-  neo4j-data:
-  neo4j-logs:
-  neo4j-import:
-  neo4j-plugins:
-  redis-data:
-  traefik-letsencrypt:
+  app-postgres-data:
+  app-redis-data:
 
 networks:
   storied-life:
-    driver: bridge 
+    driver: bridge

@@ -77,17 +77,6 @@ Conditions:
   HasHostedZone: !Not [!Equals [!Ref HostedZoneId, '']]
 
 Resources:
-  # -- EC2 Key Pair --
-  BastionKeyPair:
-    Type: AWS::EC2::KeyPair
-    Properties:
-      KeyName: !Sub '${ApplicationName}-bastion-keypair'
-      KeyType: rsa
-      KeyFormat: pem
-      Tags:
-        - Key: Name
-          Value: !Sub '${ApplicationName}-bastion-keypair'
-
   # -- Security Group --
   BastionSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -111,8 +100,6 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub '${ApplicationName}-bastion-sg'
-
-
 
   # -- IAM Role and Instance Profile --
   BastionInstanceRole:
@@ -180,7 +167,8 @@ Resources:
       LaunchTemplateData:
         ImageId: !Ref LatestAmiId
         InstanceType: !Ref BastionInstanceType
-        KeyName: !Ref BastionKeyPair
+        KeyName: !ImportValue
+          Fn::Sub: '${ApplicationName}-BastionKeyPair-ID'
         IamInstanceProfile:
           Arn: !GetAtt BastionInstanceProfile.Arn
         BlockDeviceMappings:
@@ -202,9 +190,14 @@ Resources:
         UserData: !Base64
           'Fn::Sub': |
             #!/bin/bash -xe
+            # Redirect all output to log file
+            exec > /var/log/user-data.log 2>&1
+
+            echo "Starting user-data script execution at $(date)"
+
             # Install necessary packages
             apt-get update -y
-            apt-get install -y python3-pip unzip
+            apt-get install -y python3-pip unzip python3-venv
             pip3 install https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-py3-latest.tar.gz
 
             # Start cfn-init
@@ -308,9 +301,3 @@ Outputs:
     Value: !GetAtt BastionInstanceRole.Arn
     Export:
       Name: !Sub '${ApplicationName}-BastionInstanceRole-ARN'
-
-  BastionKeyPairId:
-    Description: The ID of the bastion EC2 Key Pair
-    Value: !Ref BastionKeyPair
-    Export:
-      Name: !Sub '${ApplicationName}-BastionKeyPair-ID'

@@ -1,5 +1,5 @@
 """
-Storied Life - Digital Memorial Platform
+Storied Life - Digital Legacy Platform
 Main FastAPI application entry point.
 """
 
@@ -19,7 +19,7 @@ setup_logging()
 # Create FastAPI application
 app = FastAPI(
     title="Storied Life API",
-    description="Digital Memorial Platform API for preserving and sharing memories",
+    description="Digital Legacy Platform API for preserving and sharing memories",
     version="0.1.0",
     docs_url="/api/docs" if settings.DEBUG else None,
     redoc_url="/api/redoc" if settings.DEBUG else None,

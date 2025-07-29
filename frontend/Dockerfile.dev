@@ -1,16 +1,36 @@
-FROM node:18-alpine
+FROM ubuntu:22.04
 
 # Set working directory
 WORKDIR /app
 
-# Install curl for healthcheck
-RUN apk add --no-cache curl
+# Install system dependencies including curl for healthcheck
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nvm, Node.js and npm
+ENV NVM_DIR=/opt/nvm
+ENV NODE_VERSION=20.11.0
+ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
+
+RUN mkdir -p $NVM_DIR && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \
+    . $NVM_DIR/nvm.sh && \
+    nvm install $NODE_VERSION && \
+    nvm use $NODE_VERSION && \
+    nvm alias default $NODE_VERSION
+
+# Copy .nvmrc for version consistency
+COPY .nvmrc ./
 
 # Copy package files first for better layer caching
 COPY package.json package-lock.json ./
 
 # Install dependencies including dev dependencies
-RUN npm install
+RUN . $NVM_DIR/nvm.sh && nvm use && npm install
 
 # Copy configuration files
 COPY vite.config.ts tsconfig.json tsconfig.node.json ./
@@ -21,13 +41,13 @@ COPY tailwind.config.js postcss.config.js ./
 COPY src ./src
 COPY public ./public
 
-# Create a non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nextjs -u 1001
+# Create a non-root user with home directory
+RUN groupadd -g 1001 -r nodejs && \
+    useradd -r -u 1001 -g nodejs -m -d /home/nodejs nodejs
 
-# Change ownership of the app directory
-RUN chown -R nextjs:nodejs /app
-USER nextjs
+# Change ownership of the app directory and nvm
+RUN chown -R nodejs:nodejs /app $NVM_DIR /home/nodejs
+USER nodejs
 
 # Expose port
 EXPOSE 3001
@@ -41,4 +61,4 @@ ENV VITE_API_URL=http://localhost:3001
 #    CMD curl -f http://localhost:3000 || exit 1
 
 # Start development server with hot reloading
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3001"] 
+CMD ["bash", "-c", ". $NVM_DIR/nvm.sh && nvm use && npm run dev -- --host 0.0.0.0 --port 3001"] 

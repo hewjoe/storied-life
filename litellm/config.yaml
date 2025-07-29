@@ -35,7 +35,7 @@ model_list:
 
 # General settings
 general_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
+  master_key: null
   database_url: os.environ/DATABASE_URL
   
 # Logging
@@ -52,3 +52,7 @@ router_settings:
     "gpt-3.5": ["gpt-3.5-turbo"]
     "claude": ["claude-3-sonnet", "claude-3-haiku"]
     "gemini": ["gemini-pro"] 
+
+auth_strategy: "header_auth"
+user_id_header_name: "X-authentik-username"
+user_email_header_name: "X-authentik-email"

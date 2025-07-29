@@ -56,4 +56,9 @@ mypy==1.7.1
 
 # Testing
 httpx==0.25.2
-pytest-mock==3.12.0 
+pytest-mock==3.12.0
+email-validator==2.1.1 
+
+# OIDC Authentication
+pyjwt[crypto]==2.8.0
+cryptography==45.0.5

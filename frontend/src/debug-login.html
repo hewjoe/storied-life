@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Login Button</title>
+    <style>
+        button {
+            padding: 10px 20px;
+            background: blue;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin: 10px;
+        }
+        button:hover {
+            background: darkblue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Debug Login Button Test</h1>
+    
+    <button onclick="testClick()">Test Button 1</button>
+    <button onclick="alert('Test 2 clicked!')">Test Button 2</button>
+    
+    <script>
+        function testClick() {
+            console.log('Test button clicked!');
+            alert('Test button works!');
+        }
+        
+        console.log('Debug page loaded');
+    </script>
+    
+    <p>If buttons above work, the issue is in the React component. If they don't work, it's a browser/CSS issue.</p>
+</body>
+</html>

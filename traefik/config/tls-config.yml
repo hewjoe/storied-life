@@ -1,0 +1,4 @@
+tls:
+  certificates:
+    - certFile: /certs/storied-life.me.crt
+      keyFile: /certs/storied-life.me.key

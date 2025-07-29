@@ -1,7 +1,7 @@
 {
   "name": "storied-life-frontend",
   "version": "0.1.0",
-  "description": "Storied Life - Digital Memorial Platform Frontend",
+  "description": "Storied Life - Digital Legacy Platform Frontend",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,14 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:e2e:ui": "playwright test --ui",
+    "nvm:setup": "./scripts/setup-dev.sh",
+    "nvm:install": "nvm install",
+    "nvm:use": "nvm use",
+    "dev:nvm": "./scripts/nvm-exec.sh npm run dev",
+    "build:nvm": "./scripts/nvm-exec.sh npm run build",
+    "test:nvm": "./scripts/nvm-exec.sh npm run test",
+    "lint:nvm": "./scripts/nvm-exec.sh npm run lint"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -24,6 +31,7 @@
     "react-query": "^3.39.3",
     "zustand": "^4.4.7",
     "axios": "^1.6.2",
+    "oidc-client-ts": "^2.4.0",
     "@headlessui/react": "^1.7.17",
     "@heroicons/react": "^2.0.18",
     "clsx": "^2.0.0",

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: |
-  Application stack for the Storied Life application including EC2 instances, load balancer, SSL certificate, and DNS records.
+  Application stack for the Storied Life application including EC2 instances, load balancer, and DNS records.
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -71,7 +71,7 @@ Parameters:
   Subdomains:
     Description: Comma-separated list of subdomains for the application.
     Type: CommaDelimitedList
-    Default: frontend,backend,litellm,traefik,authelia,dex
+    Default: frontend,backend,litellm,traefik,authentik
 
 Resources:
 
@@ -320,41 +320,6 @@ Resources:
           Value: !Sub ${ApplicationName}-instance
           PropagateAtLaunch: true
 
-  # -- SSL Certificate --
-  Certificate:
-    Type: AWS::CertificateManager::Certificate
-    Properties:
-      DomainName: !Ref DomainName
-      SubjectAlternativeNames:
-        - !Sub www.${DomainName}
-        - !Sub frontend.${DomainName}
-        - !Sub backend.${DomainName}
-        - !Sub litellm.${DomainName}
-        - !Sub traefik.${DomainName}
-        - !Sub authelia.${DomainName}
-        - !Sub dex.${DomainName}
-      ValidationMethod: DNS
-      DomainValidationOptions:
-        - DomainName: !Ref DomainName
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub www.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub frontend.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub backend.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub litellm.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub traefik.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub authelia.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-        - DomainName: !Sub dex.${DomainName}
-          HostedZoneId: !Ref HostedZoneId
-      Tags:
-        - Key: Name
-          Value: !Sub ${ApplicationName}-certificate
-
   # -- Application Load Balancer --
   AppLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -400,7 +365,8 @@ Resources:
       Protocol: HTTPS
       Port: 443
       Certificates:
-        - CertificateArn: !Ref Certificate
+        - CertificateArn: !ImportValue
+            Fn::Sub: ${ApplicationName}-Certificate-ARN
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref AppTargetGroup
@@ -441,12 +407,11 @@ Resources:
           AliasTarget:
             HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
             DNSName: !GetAtt AppLoadBalancer.DNSName
-        - Name: !Sub authelia.${DomainName}
+        - Name: !Sub authentik.${DomainName}
           Type: A
           AliasTarget:
             HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
             DNSName: !GetAtt AppLoadBalancer.DNSName
-        - Name: !Sub dex.${DomainName}
           Type: A
           AliasTarget:
             HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
@@ -471,6 +436,12 @@ Outputs:
     Export:
       Name: !Sub ${ApplicationName}-ALB-DNSName
 
+  ALBHostedZoneId:
+    Description: The hosted zone ID of the Application Load Balancer
+    Value: !GetAtt AppLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub ${ApplicationName}-ALB-HostedZoneID
+
   InstanceRoleArn:
     Description: The ARN of the IAM Role for EC2 instances
     Value: !GetAtt EC2InstanceRole.Arn
@@ -482,12 +453,6 @@ Outputs:
     Value: !Ref AutoScalingGroup
     Export:
       Name: !Sub ${ApplicationName}-ASG-Name
-
-  CertificateArn:
-    Description: The ARN of the SSL certificate
-    Value: !Ref Certificate
-    Export:
-      Name: !Sub ${ApplicationName}-Certificate-ARN
 
   ApplicationKeyPairId:
     Description: The ID of the application EC2 Key Pair

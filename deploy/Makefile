@@ -22,6 +22,9 @@
 #   export HOSTED_ZONE_ID="your-route53-hosted-zone-id"
 # -----------------------------------------------------------------------------
 
+# Use bash instead of sh for better compatibility
+SHELL := /bin/bash
+
 # --- Configuration ---
 # The base name for the CloudFormation stacks.
 STACK_BASE_NAME ?= storied-life
@@ -135,7 +138,8 @@ deploy-vpc: validate-vpc
 		--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
 		--parameter-overrides \
 			ApplicationName=$(APPLICATION_NAME) \
-			MySshCidrIp=$(MY_SSH_CIDR_IP)
+			MySshCidrIp=$(MY_SSH_CIDR_IP) \
+			HostedZoneId=$(HOSTED_ZONE_ID)
 	@echo "✅ VPC stack deployment initiated."
 
 deploy-bastion: validate-bastion

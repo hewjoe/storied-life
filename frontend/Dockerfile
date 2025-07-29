@@ -1,14 +1,37 @@
 # Build stage
-FROM node:18-alpine as builder
+FROM ubuntu:22.04 as builder
 
 # Set working directory
 WORKDIR /app
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nvm and Node.js
+ENV NVM_DIR=/opt/nvm
+ENV NODE_VERSION=20.11.0
+ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
+
+RUN mkdir -p $NVM_DIR && \
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && \
+    . $NVM_DIR/nvm.sh && \
+    nvm install $NODE_VERSION && \
+    nvm use $NODE_VERSION && \
+    nvm alias default $NODE_VERSION
+
+# Copy .nvmrc for version consistency
+COPY .nvmrc ./
+
 # Copy package files
 COPY package.json package-lock.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (including devDependencies needed for build)
+RUN . $NVM_DIR/nvm.sh && nvm use && npm ci
 
 # Copy source code
 COPY . .
@@ -17,7 +40,7 @@ COPY . .
 ARG VITE_API_URL=http://localhost:8000
 ENV VITE_API_URL=$VITE_API_URL
 
-RUN npm run build
+RUN . $NVM_DIR/nvm.sh && nvm use && npm run build
 
 # Production stage
 FROM nginx:alpine as production

@@ -15,81 +15,86 @@ from app.services.chat_service import ChatService
 router = APIRouter()
 
 
-@router.post("/{memorial_id}", response_model=ChatResponse)
-async def chat_with_memorial(
-    memorial_id: UUID,
-    message: ChatMessage,
+@router.post("/{legacy_id}", response_model=ChatResponse)
+async def chat_with_legacy(
+    legacy_id: UUID,
+    chat_request: ChatRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatResponse:
     """
-    Chat with the AI persona of a memorial.
-    """
-    chat_service = ChatService(db)
+    Chat with the AI persona of a legacy.
     
-    # Verify user has access to this memorial
-    if not await chat_service.can_user_chat_with_memorial(current_user.id, memorial_id):
+    This endpoint allows users to have conversations with an AI representation
+    of the person whose legacy is preserved on the platform.
+    """
+    # Verify user has access to this legacy
+    if not await chat_service.can_user_chat_with_legacy(current_user.id, legacy_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to chat with this memorial"
+            detail="Not authorized to chat with this legacy"
         )
     
     response = await chat_service.send_message(
-        memorial_id=memorial_id,
+        legacy_id=legacy_id,
         user_id=current_user.id,
-        message=message.content
+        message=chat_request.message,
+        conversation_id=chat_request.conversation_id,
     )
     
     return response
 
 
-@router.get("/{memorial_id}/history", response_model=ChatConversation)
+@router.get("/{legacy_id}/history", response_model=ChatConversation)
 async def get_chat_history(
-    memorial_id: UUID,
-    limit: int = 50,
+    legacy_id: UUID,
+    conversation_id: Optional[UUID] = Query(None, description="Specific conversation ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ChatConversation:
     """
-    Get chat history for a memorial.
-    """
-    chat_service = ChatService(db)
+    Get chat history for a legacy.
     
-    # Verify user has access to this memorial
-    if not await chat_service.can_user_chat_with_memorial(current_user.id, memorial_id):
+    Retrieves the conversation history between the user and the AI persona
+    for the specified legacy.
+    """
+    # Verify user has access to this legacy
+    if not await chat_service.can_user_chat_with_legacy(current_user.id, legacy_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to view chat history for this memorial"
+            detail="Not authorized to view chat history for this legacy"
         )
     
     conversation = await chat_service.get_conversation_history(
-        memorial_id=memorial_id,
+        legacy_id=legacy_id,
         user_id=current_user.id,
-        limit=limit
+        conversation_id=conversation_id,
     )
     
     return conversation
 
 
-@router.delete("/{memorial_id}/history", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{legacy_id}/history", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_chat_history(
-    memorial_id: UUID,
+    legacy_id: UUID,
+    conversation_id: Optional[UUID] = Query(None, description="Specific conversation ID to clear"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
     """
-    Clear chat history for a memorial.
-    """
-    chat_service = ChatService(db)
+    Clear chat history for a legacy.
     
-    # Verify user has permission to clear chat history
-    if not await chat_service.can_user_manage_memorial_chat(current_user.id, memorial_id):
+    Clears the conversation history between the user and the AI persona.
+    If conversation_id is provided, only that conversation is cleared.
+    """
+    if not await chat_service.can_user_manage_legacy_chat(current_user.id, legacy_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to clear chat history for this memorial"
+            detail="Not authorized to clear chat history for this legacy"
         )
     
     await chat_service.clear_conversation_history(
-        memorial_id=memorial_id,
-        user_id=current_user.id
+        legacy_id=legacy_id,
+        user_id=current_user.id,
+        conversation_id=conversation_id,
     ) 

@@ -1,6 +1,6 @@
 # Storied Life - Project Setup Complete! 🎉
 
-Welcome to Storied Life, your open-source digital memorial platform. This document provides an overview of the project structure and next steps to get you started.
+Welcome to Storied Life, your open-source digital legacy platform. This document provides an overview of the project structure and next steps to get you started.
 
 ## 📁 Project Structure
 
@@ -170,8 +170,8 @@ chmod +x scripts/setup.sh
    - Email verification
    - Password reset
 
-2. **Memorial Management**
-   - Create/edit memorials
+2. **Legacy Management**
+   - Create/edit legacies
    - Upload photos
    - Basic privacy controls
 
@@ -188,7 +188,7 @@ chmod +x scripts/setup.sh
 ### Phase 2: Enhanced Features (Weeks 5-8)
 1. **Advanced UI/UX**
    - Responsive design
-   - Beautiful memorial pages
+   - Beautiful legacy pages
    - Photo galleries
 
 2. **Search & Organization**
@@ -214,7 +214,7 @@ chmod +x scripts/setup.sh
 
 3. **Advanced Analytics**
    - Usage insights
-   - Memorial statistics
+   - Legacy statistics
    - AI conversation analytics
 
 ## 🔧 Development Commands
